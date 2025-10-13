@@ -29,13 +29,15 @@ jobs:
           GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o vicarego-darwin-amd64 .
           # For arm64
           GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o vicarego-linux-arm64 .
+          # For armv7
+          GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o vicarego-linux-armv7 .
 
       - name: Create Release and Upload Assets
         uses: ncipollo/release-action@v1
         with:
           # This token is provided by Actions, you do not need to create your own token
           token: ${{ secrets.GITHUB_TOKEN }}
-          artifacts: "vicarego-linux-amd64,vicarego-windows-amd64.exe,vicarego-darwin-amd64,vicarego-linux-arm64"
+          artifacts: "vicarego-linux-amd64,vicarego-windows-amd64.exe,vicarego-darwin-amd64,vicarego-linux-arm64,vicarego-linux-armv7"
           # The action will automatically generate release notes from commits since the last tag.
           # You can set this to true if you prefer to write them manually in the GitHub UI.
           generateReleaseNotes: true
