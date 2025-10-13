@@ -1,4 +1,5 @@
 # vicarego
+[![Build and Release](https://github.com/aschiffler/vicarego/actions/workflows/release.yml/badge.svg)](https://github.com/aschiffler/vicarego/actions/workflows/release.yml)
 
 A Go application to poll data from the Viessmann ViCare API and publish it to an MQTT broker. It uses the OAuth 2.0 PKCE flow for authentication.
 
