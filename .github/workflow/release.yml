@@ -1,0 +1,45 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags like v1.0.0, v1.2.3, etc.
+
+permissions:
+  contents: write # Required to create a release and upload assets
+
+jobs:
+  build-and-release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build binaries
+        run: |
+          # For amd64
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o vicarego-linux-amd64 .
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o vicarego-windows-amd64.exe .
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o vicarego-darwin-amd64 .
+          # For arm64
+          GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o vicarego-linux-arm64 .
+
+      - name: Create Release and Upload Assets
+        uses: ncipollo/release-action@v1
+        with:
+          # This token is provided by Actions, you do not need to create your own token
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: "vicarego-linux-amd64,vicarego-windows-amd64.exe,vicarego-darwin-amd64,vicarego-linux-arm64"
+          # The action will automatically generate release notes from commits since the last tag.
+          # You can set this to true if you prefer to write them manually in the GitHub UI.
+          generateReleaseNotes: true
+          # The following options help create smaller binaries
+          # -s: Omit the symbol table and debug information.
+          # -w: Omit the DWARF symbol table.
+          # These are passed to the go build command via -ldflags
