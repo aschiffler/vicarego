@@ -327,9 +327,6 @@ func (c *APIClient) refreshToken() error {
 // GetInstallations fetches the installation data from the API.
 // It handles token refreshing automatically.
 func (c *APIClient) GetInstallations(ctx context.Context) error {
-	if c.initialized {
-		return nil
-	}
 	c.tokenMutex.RLock()
 	tokenIsExpired := c.token.IsExpired()
 	c.tokenMutex.RUnlock()
@@ -347,6 +344,10 @@ func (c *APIClient) GetInstallations(ctx context.Context) error {
 	c.tokenMutex.RLock()
 	accessToken := c.token.AccessToken
 	c.tokenMutex.RUnlock()
+
+	if c.initialized {
+		return nil
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", installationsURL, nil)
 	if err != nil {
