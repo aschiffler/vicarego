@@ -3,6 +3,12 @@
 
 A Go application to poll data from the Viessmann ViCare API and publish it to an MQTT broker. It uses the OAuth 2.0 PKCE flow for authentication.
 
+## Endpoints
+* POST https://iam.viessmann-climatesolutions.com/idp/v3/authorize?client_id={clientId}&code_challenge={code}&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A4200%2F&response_type=code&scope=offline_access
+* POST https://iam.viessmann-climatesolutions.com/idp/v3/token
+* GET https://api.viessmann-climatesolutions.com/iot/v2/equipment/installations?includeGateways=true
+* GET https://api.viessmann-climatesolutions.com/iot/v2/features/installations/{installation}/gateways/{gatewaySerial}/devices/{deviceId}/features
+
 ## Features
 
 - Authenticates with the Viessmann API using your credentials.
