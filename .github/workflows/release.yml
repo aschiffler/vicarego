@@ -23,14 +23,15 @@ jobs:
 
       - name: Build binaries
         run: |
+          LDFLAGS="-s -w -X 'main.version=${{ github.ref_name }}'"
           # For amd64
-          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o vicarego-linux-amd64 .
-          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o vicarego-windows-amd64.exe .
-          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o vicarego-darwin-amd64 .
+          GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o vicarego-linux-amd64 .
+          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o vicarego-windows-amd64.exe .
+          GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o vicarego-darwin-amd64 .
           # For arm64
-          GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o vicarego-linux-arm64 .
+          GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o vicarego-linux-arm64 .
           # For armv7
-          GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o vicarego-linux-armv7 .
+          GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="$LDFLAGS" -o vicarego-linux-armv7 .
 
       - name: Create Release and Upload Assets
         uses: ncipollo/release-action@v1

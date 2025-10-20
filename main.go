@@ -30,6 +30,9 @@ const (
 	scope            = "offline_access" // Required to get a refresh token
 )
 
+// version is the application version, set at build time.
+var version = "dev"
+
 // Config holds the application configuration loaded from environment variables.
 type Config struct {
 	Username        string
@@ -630,7 +633,7 @@ func newMQTTClient(config *Config) mqtt.Client {
 func main() {
 	// Wrap the default HTTP client's transport to log all requests made through it.
 	http.DefaultClient.Transport = &loggingRoundTripper{proxied: http.DefaultTransport}
-	log.Println("Starting Viessmann API client...")
+	log.Printf("Starting Viessmann API client version %s...", version)
 
 	// Load environment variables from .env file.
 	// It's okay if the file doesn't exist, we can still rely on shell-exported variables.
