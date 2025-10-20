@@ -24,9 +24,9 @@ import (
 
 // Constants for the Viessmann API
 const (
-	authURL          = "https://iam.viessmann.com/idp/v2/authorize"
-	tokenURL         = "https://iam.viessmann.com/idp/v2/token"
-	installationsURL = "https://api.viessmann.com/iot/v1/equipment/installations?includeGateways=true"
+	authURL          = "https://iam.viessmann-climatesolutions.com/idp/v3/authorize"
+	tokenURL         = "https://iam.viessmann-climatesolutions.com/idp/v3/token"
+	installationsURL = "https://api.viessmann-climatesolutions.com/iot/v2/equipment/installations?includeGateways=true"
 	scope            = "offline_access" // Required to get a refresh token
 )
 
@@ -63,8 +63,9 @@ type InstallationsResponse struct {
 
 // Feature represents a single data point that can be queried.
 type Feature struct {
-	Name           string `json:"feature"`
-	Uri            string `json:"uri"`
+	Name           string          `json:"feature"`
+	Uri            string          `json:"uri"`
+	Properties     json.RawMessage `json:"properties"`
 	InstallationID int
 	DeviceID       string
 }
@@ -95,20 +96,37 @@ func (t *Token) IsExpired() bool {
 
 // APIClient manages the API authentication and calls.
 type APIClient struct {
-	httpClient *http.Client
-	config     *Config
-	token      *Token
-	features   []Feature    // Stores the latest fetched features
-	tokenMutex sync.RWMutex // Protects the token during concurrent access/refresh
+	httpClient    *http.Client
+	config        *Config
+	token         *Token
+	installations []Installation
+	features      []Feature // Stores the latest fetched features
+	initialized   bool
+	tokenMutex    sync.RWMutex // Protects the token during concurrent access/refresh
+}
+
+// loggingRoundTripper is a custom http.RoundTripper that logs every request.
+type loggingRoundTripper struct {
+	proxied http.RoundTripper
+}
+
+func (lrt *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	log.Printf("--> HTTP Request: %s %s", req.Method, req.URL)
+	return lrt.proxied.RoundTrip(req)
 }
 
 // NewAPIClient creates and initializes a new APIClient.
 func NewAPIClient(config *Config) *APIClient {
+	// Create a transport that will be shared and wrapped for logging
+	baseTransport := http.DefaultTransport
+
 	return &APIClient{
-		config: config,
+		initialized: false,
+		config:      config,
 		// Create a client that does NOT follow redirects automatically.
 		// This is crucial for capturing the 'Location' header to get the authorization code.
 		httpClient: &http.Client{
+			Transport: &loggingRoundTripper{proxied: baseTransport},
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -231,6 +249,7 @@ func (c *APIClient) getToken(authCode, verifier string) error {
 	c.tokenMutex.Unlock()
 
 	log.Println("Successfully obtained access and refresh tokens.")
+	//log.Println(token.AccessToken)
 	return nil
 }
 
@@ -307,7 +326,10 @@ func (c *APIClient) refreshToken() error {
 
 // GetInstallations fetches the installation data from the API.
 // It handles token refreshing automatically.
-func (c *APIClient) GetInstallations(ctx context.Context) ([]Installation, error) {
+func (c *APIClient) GetInstallations(ctx context.Context) error {
+	if c.initialized {
+		return nil
+	}
 	c.tokenMutex.RLock()
 	tokenIsExpired := c.token.IsExpired()
 	c.tokenMutex.RUnlock()
@@ -317,7 +339,7 @@ func (c *APIClient) GetInstallations(ctx context.Context) ([]Installation, error
 			// If refresh fails, try a full re-authentication.
 			log.Println("Token refresh failed, attempting full re-authentication...")
 			if authErr := c.Authenticate(); authErr != nil {
-				return nil, fmt.Errorf("re-authentication failed after token refresh error: %w", authErr)
+				return fmt.Errorf("re-authentication failed after token refresh error: %w", authErr)
 			}
 		}
 	}
@@ -328,7 +350,7 @@ func (c *APIClient) GetInstallations(ctx context.Context) ([]Installation, error
 
 	req, err := http.NewRequestWithContext(ctx, "GET", installationsURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create installations request: %w", err)
+		return fmt.Errorf("failed to create installations request: %w", err)
 	}
 	req.Header.Add("Authorization", "Bearer "+accessToken)
 	req.Header.Add("Accept", "application/json")
@@ -336,26 +358,28 @@ func (c *APIClient) GetInstallations(ctx context.Context) ([]Installation, error
 	log.Println("Fetching installation data...")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute installations request: %w", err)
+		return fmt.Errorf("failed to execute installations request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read installations response body: %w", err)
+		return fmt.Errorf("failed to read installations response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("installations API returned non-200 status: %d. Body: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("installations API returned non-200 status: %d. Body: %s", resp.StatusCode, string(body))
 	}
 	//log.Printf("Installation response body: %s", string(body))
 
 	var installationsResp InstallationsResponse
 	if err := json.Unmarshal(body, &installationsResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal installations response: %w", err)
+		return fmt.Errorf("failed to unmarshal installations response: %w", err)
 	}
 
-	return installationsResp.Data, nil
+	c.installations = installationsResp.Data
+	c.initialized = true
+	return nil
 }
 
 // GetFeatures fetches the features for a given installation and gateway.
@@ -370,7 +394,7 @@ func (c *APIClient) GetFeatures(ctx context.Context, installationID int, gateway
 		return nil, fmt.Errorf("cannot get features, no access token available")
 	}
 
-	featuresURL := fmt.Sprintf("https://api.viessmann.com/iot/v1/equipment/installations/%d/gateways/%s/devices/%s/features", installationID, gatewaySerial, deviceId)
+	featuresURL := fmt.Sprintf("https://api.viessmann-climatesolutions.com/iot/v2/features/installations/%d/gateways/%s/devices/%s/features", installationID, gatewaySerial, deviceId)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", featuresURL, nil)
 	if err != nil {
@@ -406,75 +430,44 @@ func (c *APIClient) GetFeatures(ctx context.Context, installationID int, gateway
 	return featuresResponse.Data, nil
 }
 
-// GetFeatureValue fetches the current value of a single feature by its URI.
-// It handles token refreshing automatically.
-func (c *APIClient) GetFeatureValue(ctx context.Context, feature Feature) (*FeatureData, error) {
-	c.tokenMutex.RLock()
-	tokenIsExpired := c.token.IsExpired()
-	c.tokenMutex.RUnlock()
+func (c *APIClient) GetFeatureValueParse(ctx context.Context, feature Feature) (*FeatureData, error) {
+	// The `properties` object has a dynamic key (e.g., "value", "status", etc.),
+	// but the inner object always contains a "value" field.
+	// We unmarshal into a map to handle the dynamic outer key.
+	var propertiesMap map[string]json.RawMessage
+	if err := json.Unmarshal(feature.Properties, &propertiesMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal feature properties into map: %w. Body: %s", err, feature.Properties)
+	}
 
-	if tokenIsExpired {
-		if err := c.refreshToken(); err != nil {
-			log.Println("Token refresh failed, attempting full re-authentication...")
-			if authErr := c.Authenticate(); authErr != nil {
-				return nil, fmt.Errorf("re-authentication failed after token refresh error: %w", authErr)
+	var rawValue json.RawMessage
+	found := false
+	// Iterate over the map (should only be one key) to get the inner object.
+	for _, innerJSON := range propertiesMap {
+		var innerObject struct {
+			Value json.RawMessage `json:"value"`
+			Type  string          `json:"type"`
+		}
+		if err := json.Unmarshal(innerJSON, &innerObject); err == nil {
+			if string(innerObject.Type) == "number" {
+				rawValue = innerObject.Value
+				found = true
+				break // We found what we need
 			}
 		}
 	}
 
-	c.tokenMutex.RLock()
-	accessToken := c.token.AccessToken
-	c.tokenMutex.RUnlock()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", feature.Uri, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create feature value request: %w", err)
-	}
-	req.Header.Add("Authorization", "Bearer "+accessToken)
-	req.Header.Add("Accept", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute feature value request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read feature value response body: %w", err)
+	if !found || rawValue == nil {
+		return nil, fmt.Errorf("could not find 'value' field in properties for feature %s. Body: %s", feature.Name, feature.Properties)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("feature value API returned non-200 status: %d. Body: %s", resp.StatusCode, string(body))
-	}
-
-	// The API response for a feature value is a JSON object,
-	// typically with a structure like: {"data": {"value": ..., "status": "..."}}
-	// Based on the new structure, it is: {"data": {"properties": {"value": {"value": ...}}}}
-	var response struct {
-		Data struct {
-			Properties struct {
-				Value struct {
-					Value json.RawMessage `json:"value"`
-				} `json:"value"`
-			} `json:"properties"`
-		} `json:"data"`
-	}
-
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal feature value response: %w. Body: %s", err, string(body))
-	}
-
-	// Convert the raw value to a string. It might be a number, boolean, or string.
-	// We unquote string values to get the clean content.
-	valueStr := string(response.Data.Properties.Value.Value)
+	valueStr := string(rawValue)
 	if unquoted, err := strconv.Unquote(valueStr); err == nil {
 		valueStr = unquoted
 	}
 
 	// Construct the MQTT topic path.
 	mqttTopic := fmt.Sprintf("%s/%d/%s/%s", c.config.MqttTopicPrefix, feature.InstallationID, feature.DeviceID, feature.Name)
-
+	log.Println(mqttTopic, valueStr)
 	return &FeatureData{Topic: mqttTopic, Value: valueStr}, nil
 }
 
@@ -538,15 +531,16 @@ func loadConfig() (*Config, error) {
 	return cfg, nil
 }
 
-// discoverFeatures performs a one-time discovery of all available features.
 func discoverFeatures(ctx context.Context, client *APIClient) error {
-	log.Println("--- Starting initial feature discovery ---")
-	installations, err := client.GetInstallations(ctx)
+	// Reset the features slice to ensure we're working with a fresh list on each discovery cycle.
+	client.features = nil
+
+	err := client.GetInstallations(ctx)
 	if err != nil {
 		return fmt.Errorf("error getting installations during discovery: %w", err)
 	}
 
-	for _, inst := range installations {
+	for _, inst := range client.installations {
 		for _, gw := range inst.Gateways {
 			for _, dev := range gw.Devices {
 				features, err := client.GetFeatures(ctx, inst.ID, gw.Serial, dev.Id)
@@ -563,12 +557,13 @@ func discoverFeatures(ctx context.Context, client *APIClient) error {
 		}
 	}
 	log.Printf("--- Feature discovery finished. Found %d total features. ---", len(client.features))
-
-	log.Println("--- List of all discovered features ---")
-	for _, feature := range client.features {
-		log.Println(feature.Name)
+	if !client.initialized {
+		log.Println("--- List of all discovered features ---")
+		for _, feature := range client.features {
+			log.Println(feature.Name, feature.Properties)
+		}
+		log.Println("---------------------------------------")
 	}
-	log.Println("---------------------------------------")
 	return nil
 }
 
@@ -581,11 +576,17 @@ func pollFeatureData(ctx context.Context, client *APIClient, mqttClient mqtt.Cli
 		featuresToPollMap[fName] = struct{}{}
 	}
 
+	// Get Features (all)
+	discoveryCtx, discoveryCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	if err := discoverFeatures(discoveryCtx, client); err != nil {
+		log.Fatalf("Failed to discover features on startup: %v", err)
+	}
+	discoveryCancel()
+
 	// Iterate through all discovered features and poll the ones we're interested in.
 	for _, feature := range client.features {
 		if _, ok := featuresToPollMap[feature.Name]; ok {
-			log.Printf("Polling feature: %s", feature.Name)
-			featureData, err := client.GetFeatureValue(ctx, feature)
+			featureData, err := client.GetFeatureValueParse(ctx, feature)
 			if err != nil {
 				log.Printf("  Error getting value for feature %s: %v", feature.Name, err)
 				continue
@@ -624,7 +625,10 @@ func newMQTTClient(config *Config) mqtt.Client {
 	}
 	return mqtt.NewClient(opts)
 }
+
 func main() {
+	// Wrap the default HTTP client's transport to log all requests made through it.
+	http.DefaultClient.Transport = &loggingRoundTripper{proxied: http.DefaultTransport}
 	log.Println("Starting Viessmann API client...")
 
 	// Load environment variables from .env file.
